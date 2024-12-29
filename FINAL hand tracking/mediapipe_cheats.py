@@ -187,8 +187,6 @@ def get_hand_gesture(hand_landmarks):
         
     return "UNKNOWN"
 
-
-
 def detect_hand_direction(hand_landmarks):
     """
     Detect if a hand is pointing up, down, left, or right
@@ -229,8 +227,8 @@ def detect_hand_direction(hand_landmarks):
         
     return direction, angle
 
-
 def get_hand_landmarks(results):
+
     """
     Organize hand landmarks by handedness (left/right)
     
@@ -253,3 +251,131 @@ def get_hand_landmarks(results):
             hands[handedness] = hand_landmarks
     
     return hands
+
+def detect_thumbs_up(hand_landmarks):
+    """
+    Detect if the hand is making a thumbs up gesture.
+    
+    A thumbs up gesture is characterized by:
+    1. Thumb extended upward (lower y position than base)
+    2. All other fingers closed (curled inward)
+    3. Thumb should be significantly above other finger tips
+    
+    Args:
+        hand_landmarks: MediaPipe hand landmarks
+        
+    Returns:
+        bool: True if thumbs up detected, False otherwise
+    """
+    # Get thumb landmarks
+    thumb_tip = hand_landmarks.landmark[mp_hands.HandLandmark.THUMB_TIP]
+    thumb_mcp = hand_landmarks.landmark[mp_hands.HandLandmark.THUMB_MCP]
+    
+    # Get other finger tips
+    index_tip = hand_landmarks.landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP]
+    middle_tip = hand_landmarks.landmark[mp_hands.HandLandmark.MIDDLE_FINGER_TIP]
+    ring_tip = hand_landmarks.landmark[mp_hands.HandLandmark.RING_FINGER_TIP]
+    pinky_tip = hand_landmarks.landmark[mp_hands.HandLandmark.PINKY_TIP]
+    
+    # Get finger bases (MCP joints)
+    index_mcp = hand_landmarks.landmark[mp_hands.HandLandmark.INDEX_FINGER_MCP]
+    middle_mcp = hand_landmarks.landmark[mp_hands.HandLandmark.MIDDLE_FINGER_MCP]
+    ring_mcp = hand_landmarks.landmark[mp_hands.HandLandmark.RING_FINGER_MCP]
+    pinky_mcp = hand_landmarks.landmark[mp_hands.HandLandmark.PINKY_MCP]
+    
+    # Check if thumb is extended upward
+    thumb_extended = thumb_tip.y < thumb_mcp.y
+    
+    # Check if thumb is significantly above other finger tips
+    thumb_highest = all(
+        thumb_tip.y < tip.y - 0.12  # Thumb should be significantly higher
+        for tip in [index_tip, middle_tip, ring_tip, pinky_tip]
+    )
+    
+    # Check if other fingers are closed by comparing tips to their bases
+    fingers_closed = all(
+        tip.y > base.y  # Tip should be below base for closed fingers
+        for tip, base in [
+            (index_tip, index_mcp),
+            (middle_tip, middle_mcp),
+            (ring_tip, ring_mcp),
+            (pinky_tip, pinky_mcp)
+        ]
+    )
+    
+    return thumb_extended and thumb_highest and fingers_closed
+
+def detect_thumbs_gesture(hand_landmarks, handedness, THRESHOLD = 30):
+    """
+    Detect thumbs up/down gesture using angle thresholds.
+    
+    The gesture is detected based on:
+    1. Fingers being curled inward
+    2. Thumb extension direction (left for right hand, right for left hand)
+    3. Thumb angle relative to vertical (within 30 degrees of up/down)
+    
+    Args:
+        hand_landmarks: MediaPipe hand landmarks
+        handedness: String indicating "Left" or "Right" hand
+        
+    Returns:
+        str: 'UP' for thumbs up, 'DOWN' for thumbs down, 'NONE' for no thumb gesture
+    """
+    # Get thumb landmarks
+    thumb_tip = hand_landmarks.landmark[mp_hands.HandLandmark.THUMB_TIP]
+    thumb_mcp = hand_landmarks.landmark[mp_hands.HandLandmark.THUMB_MCP]
+    
+    # Get finger landmarks
+    index_tip = hand_landmarks.landmark[mp_hands.HandLandmark.INDEX_FINGER_TIP]
+    index_pip = hand_landmarks.landmark[mp_hands.HandLandmark.INDEX_FINGER_PIP]
+    middle_tip = hand_landmarks.landmark[mp_hands.HandLandmark.MIDDLE_FINGER_TIP]
+    middle_pip = hand_landmarks.landmark[mp_hands.HandLandmark.MIDDLE_FINGER_PIP]
+    ring_tip = hand_landmarks.landmark[mp_hands.HandLandmark.RING_FINGER_TIP]
+    ring_pip = hand_landmarks.landmark[mp_hands.HandLandmark.RING_FINGER_PIP]
+    pinky_tip = hand_landmarks.landmark[mp_hands.HandLandmark.PINKY_TIP]
+    pinky_pip = hand_landmarks.landmark[mp_hands.HandLandmark.PINKY_PIP]
+    wrist = hand_landmarks.landmark[mp_hands.HandLandmark.WRIST]
+    
+    # Check if fingers are curled inward
+    fingers_curled = all(
+        abs(tip.x - wrist.x) < abs(pip.x - wrist.x)
+        for tip, pip in [
+            (index_tip, index_pip),
+            (middle_tip, middle_pip),
+            (ring_tip, ring_pip),
+            (pinky_tip, pinky_pip)
+        ]
+    )
+    
+    if not fingers_curled:
+        return "NONE"
+    
+    # Check if thumb is extended in the correct direction for the hand
+    thumb_extended_correctly = (
+        (handedness == "Right" and thumb_tip.x < thumb_mcp.x) or
+        (handedness == "Left" and thumb_tip.x > thumb_mcp.x)
+    )
+    
+    if not thumb_extended_correctly:
+        return "NONE"
+    
+    # Calculate the angle between the thumb and the vertical axis
+    # First, get the vector from MCP to tip
+    dx = thumb_tip.x - thumb_mcp.x
+    dy = thumb_tip.y - thumb_mcp.y
+    
+    # Calculate angle in degrees using arctangent
+    # atan2 returns angle in radians in range (-π, π)
+    angle = np.degrees(np.arctan2(dx, -dy))  # Negative dy because y increases downward
+    
+    # Normalize angle to be positive for both hands
+    if handedness == "Left":
+        angle = -angle
+    
+    # Determine gesture based on angle
+    if abs(angle) <= THRESHOLD:
+        return "UP"
+    elif abs(angle) >= 180 - THRESHOLD:
+        return "DOWN"
+    else:
+        return "NONE"
