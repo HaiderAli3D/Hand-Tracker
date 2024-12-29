@@ -41,6 +41,7 @@ right_hand_states = {
     "mouseDown": False,
     "rightMouseDown": False,
     "middleMouseDown": False,
+    "down": False
 }
 
 left_hand_states = {
@@ -62,18 +63,39 @@ control_area = {
 }
 
 global_hand_state = False
-scroll_enable = False
+scroll_enable = True
 two_hand_gesture = False
 previous_hand_distance = None
 
 timer = 0
 timer2 = 0
+timer3 = 0
+
+last_gesture_time = time.time()
+last_scroll_time = time.time()
+last_click_time = time.time()
+
+movement_smoothing = 0.9
+previous_positions = []
+smoothing_window = 0
+
+def get_elapsed_time(last_time):
+    """
+    Calculate elapsed time since a given timestamp in seconds
+    
+    Args:
+        last_time: The timestamp to measure from
+        
+    Returns:
+        float: Number of seconds elapsed
+    """
+    return time.time() - last_time
 
 def draw_hand_connection(frame, left_landmarks, right_landmarks, is_pinching=False):
     if left_landmarks and right_landmarks:
         # Get center points of each hand
-        left_x, left_y = calculate_hand_midpoint(left_landmarks)
-        right_x, right_y = calculate_hand_midpoint(right_landmarks)
+        left_x, left_y = mpc.get_hand_center(left_landmarks)
+        right_x, right_y = mpc.get_hand_center(right_landmarks)
         
         # Convert the normalized (0-1) coordinates to actual pixel positions
         height, width, _ = frame.shape
@@ -102,18 +124,6 @@ def calculate_finger_distances(hand_landmarks):
         "pinky": np.sqrt((pinky_tip.x - thumb_tip.x)**2 + (pinky_tip.y - thumb_tip.y)**2)
     }
 
-def calculate_hand_midpoint(hand_landmarks):
-    """Calculate the midpoint of the hand"""
-    index_base = hand_landmarks.landmark[mp_hands.HandLandmark.INDEX_FINGER_MCP]
-    ring_base = hand_landmarks.landmark[mp_hands.HandLandmark.RING_FINGER_MCP]
-    thumb_base = hand_landmarks.landmark[mp_hands.HandLandmark.THUMB_CMC]
-    wrist = hand_landmarks.landmark[mp_hands.HandLandmark.WRIST]
-    
-    midpointX = (index_base.x + ring_base.x + thumb_base.x + wrist.x) / 4
-    midpointY = (index_base.y + ring_base.y + thumb_base.y + wrist.y) / 4
-    
-    return midpointX, midpointY
-
 def map_to_screen_coordinates(x, y):
     """
     Map coordinates from the control area to full screen coordinates
@@ -131,13 +141,20 @@ def map_to_screen_coordinates(x, y):
     screen_x = x_normalized * screenWidth
     screen_y = y_normalized * screenHeight
     
+    finalX, finalY = smooth_position(screen_x, screen_y)
+    
+    return finalX, finalY
     return screen_x, screen_y
 
 def process_right_hand(hand_landmarks, frame, frameWidth, frameHeight):
+    global last_gesture_time
+    global last_scroll_time
+    global last_click_time
     global timer
     global scroll_enable
     global global_hand_state
     global two_hand_gesture
+    global timer3
     
     """Handle right hand mouse control functions"""
     distances = calculate_finger_distances(hand_landmarks)
@@ -151,59 +168,66 @@ def process_right_hand(hand_landmarks, frame, frameWidth, frameHeight):
     cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
     
     # Toggle hand enabled state
-    if mpc.get_hand_gesture(hand_landmarks) == "FIST" and timer > 10:
+    #if mpc.get_hand_gesture(hand_landmarks) == "FIST" and timer > 10:
+        #global_hand_state = not global_hand_state
+        #timer = 0
+    
+    if mpc.detect_thumbs_gesture(hand_landmarks, "Right", 15) == "UP" and get_elapsed_time(last_gesture_time) > 1.5:
         global_hand_state = not global_hand_state
         timer = 0
+        last_gesture_time = time.time()
     
     if two_hand_gesture:
         return
     
     if global_hand_state:
         # Left click
-        if distances["index"] < 0.045 and not right_hand_states["mouseDown"] and not right_hand_states["rightMouseDown"] and not right_hand_states["middleMouseDown"]:
-            #pag.mouseDown()
+        if distances["index"] < 0.045 and not right_hand_states["down"] and get_elapsed_time(last_click_time) > 0.5:
             mouse.click(Button.left, 1)
+            timer3 = 0
+            last_click_time = time.time()
             
-        if distances["ring"] < 0.065 and not right_hand_states["mouseDown"] and not right_hand_states["rightMouseDown"] and not right_hand_states["middleMouseDown"]:
+        if distances["ring"] < 0.065 and not right_hand_states["down"]:
             mouse.press(Button.left)
             right_hand_states["mouseDown"] = True
-        if distances["ring"] > 0.09 and right_hand_states["mouseDown"]:
+            right_hand_states["down"] = True
+        if distances["ring"] > 0.12 and right_hand_states["mouseDown"]:
             mouse.release(Button.left)
             right_hand_states["mouseDown"] = False
+            right_hand_states["down"] = False
 
         # Right click
-        if distances["middle"] < 0.065 and not right_hand_states["rightMouseDown"] and not right_hand_states["middleMouseDown"]:
-            #pag.mouseDown(button="right")
+        if distances["middle"] < 0.065 and not right_hand_states["down"]:
             mouse.press(Button.right)
             right_hand_states["rightMouseDown"] = True
+            right_hand_states["down"] = True
         if distances["middle"] > 0.09 and right_hand_states["rightMouseDown"]:
-            #pag.mouseUp(button="right")
             mouse.release(Button.right)
             right_hand_states["rightMouseDown"] = False
+            right_hand_states["down"] = False
         
         # Middle click
         if (distances["index"] < 0.045 and  
             distances["middle"] < 0.055 and 
             not right_hand_states["middleMouseDown"]):
-            #pag.mouseUp()
             mouse.release(Button.left)
             right_hand_states["mouseDown"] = False
-            #pag.mouseUp(button="right")
             mouse.release(Button.right)
             right_hand_states["rightMouseDown"] = False
-            #pag.mouseDown(button="middle")
             mouse.press(Button.middle)
             right_hand_states["middleMouseDown"] = True
+            right_hand_states["down"] = True
         if ((distances["index"] > 0.06 or  
             distances["middle"] > 0.08) and 
             right_hand_states["middleMouseDown"]):            
-            pag.mouseUp(button="middle")
             mouse.release(Button.middle)
             right_hand_states["middleMouseDown"] = False
+            right_hand_states["down"] = False
 
-        if distances["pinky"] < 0.055 and timer > 6:
+        if distances["pinky"] < 0.055 and get_elapsed_time(last_scroll_time) > 0.6:
             scroll_enable = not scroll_enable
             timer = 0
+            last_scroll_time = time.time()
                  
         # Draw cursor indicator
         cursor_x = int(midpointX * frameWidth)
@@ -215,8 +239,7 @@ def process_right_hand(hand_landmarks, frame, frameWidth, frameHeight):
         
         # Map hand position to screen coordinates
         screen_x, screen_y = map_to_screen_coordinates(midpointX, midpointY)
-        #pag.moveTo(screen_x, screen_y)
-        #pag.dragTo(screen_x, screen_y, mouseDownUp = False)
+
         mouse.position = (screen_x, screen_y)
 
 def process_left_hand(hand_landmarks, frame, frameWidth, frameHeight):
@@ -227,6 +250,14 @@ def process_left_hand(hand_landmarks, frame, frameWidth, frameHeight):
 
     if two_hand_gesture:
         return
+    
+    if scroll_enable:
+        if mpc.detect_thumbs_gesture(hand_landmarks, "Left", 55) == "UP":
+            print("UP")
+            mouse.scroll(0, 0.5)
+        elif mpc.detect_thumbs_gesture(hand_landmarks, "Left", 70) == "DOWN":
+            print("DOWN")
+            mouse.scroll(0, -0.5)
 
     """Handle left hand functions"""
     distances = calculate_finger_distances(hand_landmarks)
@@ -234,74 +265,61 @@ def process_left_hand(hand_landmarks, frame, frameWidth, frameHeight):
     
     # Toggle left hand enabled state
         
-    if global_hand_state:
+    if not global_hand_state:
+        return
             
-        # Draw different colored cursor for left hand
-        cursor_x = int(midpointX * frameWidth)
-        cursor_y = int(midpointY * frameHeight)
-        cv2.circle(frame, (cursor_x, cursor_y), 10, (0, 255, 0), 4)    
-    
-        # Get hand direction
-        direction, angle = mpc.detect_hand_direction(hand_landmarks)
-        
-        # # shift
-        # if distances["middle"] < 0.065 and timer2 > 3:
-        #     if left_hand_states["shift"] == True:
-        #         pag.keyUp("shift")
-        #         left_hand_states["shift"] = False
-        #     else:
-        #         pag.keyDown("shift")
-        #         left_hand_states["shift"] = True
-        #     timer2 = 0                
-            
-        
-        # Draw direction indicator on frame
-        cv2.putText(frame, 
-                    f"Direction: {direction}", 
-                    (10, 90), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 
-                    1, 
-                    (200, 50, 0), 
-                    2)
-        
-        # Draw angle indicator (optional, helpful for debugging)
-        cv2.putText(frame, 
-                    f"Angle: {angle:.1f}", 
-                    (10, 120), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 
-                    1, 
-                    (200, 50, 0), 
-                    2)
+    # Draw different colored cursor for left hand
+    cursor_x = int(midpointX * frameWidth)
+    cursor_y = int(midpointY * frameHeight)
+    cv2.circle(frame, (cursor_x, cursor_y), 10, (0, 255, 0), 4)    
 
-        # show whether scroll is enabled
-        cv2.putText(frame, 
-                    str(scroll_enable), 
-                    (10, 160), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 
-                    1, 
-                    (200, 50, 0), 
-                    2)
+    # Get hand direction
+    direction, angle = mpc.detect_hand_direction(hand_landmarks)
+    
+    # # shift
+    # if distances["middle"] < 0.065 and timer2 > 3:
+    #     if left_hand_states["shift"] == True:
+    #         pag.keyUp("shift")
+    #         left_hand_states["shift"] = False
+    #     else:
+    #         pag.keyDown("shift")
+    #         left_hand_states["shift"] = True
+    #     timer2 = 0                
         
-        # if left_hand_states["shift"]:
-        #     cv2.putText(frame, 
-        #                 "shift", 
-        #                 (10, 190), 
-        #                 cv2.FONT_HERSHEY_SIMPLEX, 
-        #                 1, 
-        #                 (200, 50, 0), 
-        #                 2)
-            
-        
-        
-        # You can now use the direction for specific controls
-        if global_hand_state:
-            if scroll_enable:
-                if direction == "RIGHT":
-                    #pag.scroll(60)
-                    mouse.scroll(0, 1)
-                elif direction == "LEFT":
-                    #pag.scroll(-60)
-                    mouse.scroll(0, -1)
+    
+    # Draw direction indicator on frame
+    cv2.putText(frame, 
+                f"Direction: {direction}", 
+                (10, 90), 
+                cv2.FONT_HERSHEY_SIMPLEX, 
+                1, 
+                (200, 50, 0), 
+                2)
+    
+    # Draw angle indicator (optional, helpful for debugging)
+    cv2.putText(frame, 
+                f"Angle: {angle:.1f}", 
+                (10, 120), 
+                cv2.FONT_HERSHEY_SIMPLEX, 
+                1, 
+                (200, 50, 0), 
+                2)
+
+    # show whether scroll is enabled
+    cv2.putText(frame, 
+                str(scroll_enable), 
+                (10, 160), 
+                cv2.FONT_HERSHEY_SIMPLEX, 
+                1, 
+                (200, 50, 0), 
+                2)
+                
+    # You can now use the direction for specific controls
+    if scroll_enable:
+        if direction == "RIGHT":
+            mouse.scroll(0, 0.4)
+        elif direction == "LEFT":
+            mouse.scroll(0, -0.4)
 
 def process_two_handed_gestures(left_landmarks, right_landmarks):
     """
@@ -323,14 +341,11 @@ def process_two_handed_gestures(left_landmarks, right_landmarks):
     # Check if both hands are pinching
     if left_distances["index"] < 0.055 and right_distances["index"] < 0.055:
         two_hand_gesture = True
-        #pag.mouseUp()
         mouse.release(Button.left)
 
         right_hand_states["mouseDown"] = False
-        #pag.mouseUp(button="right")
         mouse.release(Button.right)
         right_hand_states["rightMouseDown"] = False
-        #pag.mouseUp(button="middle")
         mouse.release(Button.middle)
         right_hand_states["middleMouseDown"] = False
         
@@ -346,19 +361,60 @@ def process_two_handed_gestures(left_landmarks, right_landmarks):
         
         # Calculate and apply zoom
         distance_change = current_distance - previous_hand_distance
-        amount_to_scroll = int(distance_change * 50)
-        #pag.scroll(amount_to_scroll)
+        amount_to_scroll = int(distance_change * 40)
         mouse.scroll(0, amount_to_scroll)
         
         previous_hand_distance = current_distance
     
-    elif left_distances["index"] > 0.1 or right_distances["index"] < 1:
+    elif left_distances["index"] > 0.14 or right_distances["index"] > 0.14:
         previous_hand_distance = None
         two_hand_gesture = False
+
+def smooth_position(newX, newY):
+    """
+    this function will smooth out the hand tracking input before mapping it to the mouse.
+    It does this by averaging the movement over the past few calculated frames. The exact amount and properties can be configured in the _init_
+
+    basicaly I just work out the mean potition of my hand over the last few frames and return the result. It"s not that complex.
+    """
+    #add the most recent hand potition to a last 
+    if smoothing_window == 0:
+        return newX, newY
+    
+    new_position = {"x": newX, "y": newY}
+    previous_positions.append(new_position)
+    
+    # checks if the length of the list is longer than the frame window set, if it is then it deletes the oldest item
+    if len(previous_positions) > smoothing_window:
+        previous_positions.pop(0)
+    
+    # created a new dicitonary with blank X and Y cords
+    smoothed = {"x": 0, "y": 0}
+    # I then add up all the X and Y coordinated from the previous positions
+    for pos in previous_positions:
+        smoothed["x"] += pos["x"]
+        smoothed["y"] += pos["y"]
+    
+    # then I divide the sum by the number of items added
+    smoothed["x"] /= len(previous_positions)
+    smoothed["y"] /= len(previous_positions)
+    
+    #basicaly these last few lines just calculated the mean potion of my hand over the last few frames
+    
+    # these last lines just apply the movement_smoothing amount variable set at initialisation. This vairable just says how much of the smoothing to actualy apply.
+    final_x = (smoothed["x"] * movement_smoothing + 
+            new_position["x"] * (1 - movement_smoothing))
+    final_y = (smoothed["y"] * movement_smoothing + 
+            new_position["y"] * (1 - movement_smoothing))
+    
+    # return the smoothed coordinates
+    return final_x, final_y
+
 
 while True:
     timer += 1
     timer2 += 1
+    timer3 += 1
     success, frame = cap.read()
     if not success:
         break
@@ -399,7 +455,7 @@ while True:
             draw_hand_connection(frame, left_hand, right_hand, False)
         else:
             draw_hand_connection(frame, left_hand, right_hand, True)
-
+        
     cv2.imshow("Hand Tracker", frame)
     if cv2.waitKey(1) & 0xFF == 27:
         break
