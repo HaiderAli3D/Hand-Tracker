@@ -178,7 +178,7 @@ def get_hand_gesture(hand_landmarks):
     # Identify common gestures
     if raised_fingers == 0:
         return "FIST"
-    elif raised_fingers == 5:
+    elif raised_fingers <= 4:
         return "OPEN_PALM"
     elif raised_fingers == 1 and is_finger_raised(hand_landmarks, 'INDEX'):
         return "POINTING"
@@ -335,30 +335,58 @@ def detect_thumbs_gesture(hand_landmarks, handedness, THRESHOLD = 30):
     pinky_tip = hand_landmarks.landmark[mp_hands.HandLandmark.PINKY_TIP]
     pinky_pip = hand_landmarks.landmark[mp_hands.HandLandmark.PINKY_PIP]
     wrist = hand_landmarks.landmark[mp_hands.HandLandmark.WRIST]
-    
+
+    index_base = hand_landmarks.landmark[mp_hands.HandLandmark.INDEX_FINGER_MCP]
+    middle_base = hand_landmarks.landmark[mp_hands.HandLandmark.MIDDLE_FINGER_MCP]
+    ring_base = hand_landmarks.landmark[mp_hands.HandLandmark.RING_FINGER_MCP]
+    pinky_base = hand_landmarks.landmark[mp_hands.HandLandmark.PINKY_MCP]
+
+    base_list = [index_base, middle_base, ring_base, pinky_base]
+
     # Check if fingers are curled inward
-    fingers_curled = all(
-        abs(tip.x - wrist.x) < abs(pip.x - wrist.x)
-        for tip, pip in [
-            (index_tip, index_pip),
-            (middle_tip, middle_pip),
-            (ring_tip, ring_pip),
-            (pinky_tip, pinky_pip)
-        ]
-    )
+    # fingers_curled = all(
+    #     abs(tip.x - wrist.x) < abs(pip.x - wrist.x)
+    #     for tip, pip in [
+    #         (index_tip, index_pip),
+    #         (middle_tip, middle_pip),
+    #         (ring_tip, ring_pip),
+    #         (pinky_tip, pinky_pip)
+    #     ]
+    # )
+
+    if handedness == "Right":
+        fingers_curled = all(
+            tip.x > index_base.x + 0.02
+            for tip, base in [
+            (index_tip, index_base),
+            (middle_tip, middle_base),
+            (ring_tip, ring_base),
+            (pinky_tip, pinky_base)   
+            ]
+        ) 
+
+    else:
+        fingers_curled = all(
+            tip.x < index_base.x - 0.02 
+            for tip, base in [
+            (index_tip, index_base),
+            (middle_tip, middle_base),
+            (ring_tip, ring_base),
+            (pinky_tip, pinky_base)   
+            ]
+        )
     
+    correct_rotation = all(
+        base.x < thumb_tip.x
+        for base in base_list
+    )
+
     if not fingers_curled:
         return "NONE"
     
-    # Check if thumb is extended in the correct direction for the hand
-    thumb_extended_correctly = (
-        (handedness == "Right" and thumb_tip.x < thumb_mcp.x) or
-        (handedness == "Left" and thumb_tip.x > thumb_mcp.x)
-    )
-    
-    if not thumb_extended_correctly:
+    if not correct_rotation:
         return "NONE"
-    
+
     # Calculate the angle between the thumb and the vertical axis
     # First, get the vector from MCP to tip
     dx = thumb_tip.x - thumb_mcp.x
